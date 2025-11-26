@@ -4,6 +4,41 @@ import config from '../config';
 
 const router = Router();
 
+/**
+ * @swagger
+ * /api/webhooks/stripe:
+ *   post:
+ *     tags: [Webhooks]
+ *     summary: Handle Stripe webhook events
+ *     description: Processes incoming Stripe webhook events for payment and subscription updates
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/StripeWebhookPayload'
+ *     responses:
+ *       200:
+ *         description: Webhook processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 received:
+ *                   type: boolean
+ *                   example: true
+ *       500:
+ *         description: Webhook processing failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "Webhook handler failed"
+ */
 // Stripe webhook endpoint
 router.post('/', async (req: Request, res: Response) => {
   try {

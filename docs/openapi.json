@@ -1,0 +1,545 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Centralized Billing System API",
+    "version": "1.0.0",
+    "description": "Centralized Billing System API — multi-tenant billing, subscriptions, payments, and analytics."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Development Server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Enter JWT token"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "ERROR_CODE"
+          },
+          "message": {
+            "type": "string",
+            "example": "Error description"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "example": "/api/endpoint"
+          }
+        }
+      },
+      "ValidationError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "VALIDATION_ERROR"
+          },
+          "message": {
+            "type": "string",
+            "example": "Input validation failed"
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "example": "email"
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Invalid email format"
+                }
+              }
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "example": "/api/organizations"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "healthy"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "uptime": {
+            "type": "number",
+            "example": 12345.67
+          },
+          "environment": {
+            "type": "string",
+            "example": "development"
+          },
+          "version": {
+            "type": "string",
+            "example": "1.0.0"
+          },
+          "memory": {
+            "type": "object",
+            "properties": {
+              "rss": {
+                "type": "number",
+                "example": 358252544
+              },
+              "heapTotal": {
+                "type": "number",
+                "example": 278396928
+              },
+              "heapUsed": {
+                "type": "number",
+                "example": 249656920
+              },
+              "external": {
+                "type": "number",
+                "example": 6753568
+              },
+              "arrayBuffers": {
+                "type": "number",
+                "example": 4130150
+              }
+            }
+          },
+          "cpu": {
+            "type": "object",
+            "properties": {
+              "user": {
+                "type": "number",
+                "example": 123456
+              },
+              "system": {
+                "type": "number",
+                "example": 78910
+              }
+            }
+          }
+        }
+      },
+      "SubscriptionResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "example": "sub_123"
+                },
+                "customerId": {
+                  "type": "string",
+                  "example": "cus_123"
+                },
+                "priceId": {
+                  "type": "string",
+                  "example": "price_123"
+                },
+                "status": {
+                  "type": "string",
+                  "example": "active"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      },
+      "CreateCustomerRequest": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "example": "customer@example.com",
+            "description": "Customer email address"
+          }
+        }
+      },
+      "CreateSubscriptionRequest": {
+        "type": "object",
+        "required": [
+          "customerId",
+          "priceId"
+        ],
+        "properties": {
+          "customerId": {
+            "type": "string",
+            "example": "cus_123",
+            "description": "Stripe customer ID"
+          },
+          "priceId": {
+            "type": "string",
+            "example": "price_123",
+            "description": "Stripe price ID"
+          }
+        }
+      },
+      "StripeWebhookPayload": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "example": "customer.subscription.created",
+            "description": "Event type"
+          },
+          "data": {
+            "type": "object",
+            "description": "Event data object"
+          }
+        }
+      }
+    },
+    "responses": {
+      "UnauthorizedError": {
+        "description": "Authentication information is missing or invalid",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "example": "UNAUTHORIZED"
+                },
+                "message": {
+                  "type": "string",
+                  "example": "Authentication required"
+                }
+              }
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "Input validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "BearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "System health and monitoring endpoints"
+    },
+    {
+      "name": "Organizations",
+      "description": "Organization management endpoints"
+    },
+    {
+      "name": "Users",
+      "description": "User management and authentication"
+    },
+    {
+      "name": "Subscriptions",
+      "description": "Subscription management endpoints"
+    },
+    {
+      "name": "Payments",
+      "description": "Payment processing and history"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Webhook management and processing"
+    },
+    {
+      "name": "Analytics",
+      "description": "Revenue and usage analytics"
+    }
+  ],
+  "paths": {
+    "/api/billing/customers": {
+      "post": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Create a new customer",
+        "description": "Creates a new customer in the billing system",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Customer created successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "example": "cus_123abc"
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          }
+        }
+      }
+    },
+    "/api/billing/subscriptions": {
+      "post": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Create a new subscription",
+        "description": "Creates a new subscription for a customer",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSubscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Subscription created successfully"
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Subscriptions"
+        ],
+        "summary": "Get all subscriptions",
+        "description": "Retrieves a list of all subscriptions",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of subscriptions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/UnauthorizedError"
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Get system health status",
+        "description": "Returns comprehensive system health information including uptime, memory usage, and CPU statistics",
+        "responses": {
+          "200": {
+            "description": "Health check successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/hello": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Simple greeting endpoint",
+        "description": "Returns a simple greeting message with timestamp and environment information",
+        "responses": {
+          "200": {
+            "description": "Greeting message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string",
+                      "example": "Hello from Centralized Billing System!"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "environment": {
+                      "type": "string",
+                      "example": "development"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/stripe": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Handle Stripe webhook events",
+        "description": "Processes incoming Stripe webhook events for payment and subscription updates",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StripeWebhookPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Webhook processed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "received": {
+                      "type": "boolean",
+                      "example": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Webhook processing failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "example": "Webhook handler failed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,200 +2,237 @@
  * Swagger/OpenAPI Documentation Configuration
  * 
  * Provides comprehensive API documentation for the Centralized Billing System
- * with industry-standard OpenAPI 3.0 specifications.
+ * with industry-standard OpenAPI 3.0 specifications for Express.js
  */
 
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
-import { INestApplication } from '@nestjs/common'
+import swaggerUi from 'swagger-ui-express'
+import swaggerJsdoc from 'swagger-jsdoc'
+import { Express } from 'express'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
 
 /**
  * Configure Swagger documentation for the billing system
  */
-export function setupSwagger(app: INestApplication): void {
-  const config = new DocumentBuilder()
-    .setTitle('Centralized Billing System API')
-    .setDescription(`
-# Centralized Seat-Based Billing System
-
-A comprehensive multi-tenant billing platform supporting:
-
-## 🏢 Multi-Product Architecture
-- **HealOS**: Healthcare management system
-- **PowerDialer**: Sales automation platform  
-- **Openmic**: Communication platform
-- **SalesRole**: CRM and sales tools
-
-## 💳 Billing Features
-- **Seat-based subscriptions**: Pay per user model
-- **Stripe integration**: Complete payment processing
-- **External ID mapping**: Support for product-specific organization identifiers
-- **Real-time seat verification**: Instant access control
-- **Comprehensive analytics**: Revenue, usage, and churn metrics
-
-## 🔐 Security & Authentication
-- **Clerk integration**: Secure user authentication
-- **JWT-based API access**: Stateless authentication
-- **Role-based permissions**: Organization, admin, billing, and member roles
-- **Audit logging**: Complete action tracking
-
-## 📊 Analytics & Reporting
-- **MRR tracking**: Monthly recurring revenue analytics
-- **Seat utilization**: Daily usage metrics
-- **Payment history**: Complete financial tracking
-- **Churn analysis**: Subscription lifecycle metrics
-
-## 🔄 Webhook Integration
-- **Stripe webhooks**: Real-time payment notifications
-- **Product webhooks**: Notify external systems of seat changes
-- **Idempotent processing**: Reliable event handling
-
-## 🏗️ Enterprise Ready
-- **Database connection pooling**: Optimized PostgreSQL performance
-- **Error handling**: Comprehensive error responses
-- **Rate limiting**: API protection
-- **Input validation**: Request/response validation with class-validator
-`)
-    .setVersion('1.0.0')
-    .setContact(
-      'Engineering Team',
-      'https://github.com/attack-capital',
-      'engineering@attackcapital.com'
-    )
-    .setLicense('MIT', 'https://opensource.org/licenses/MIT')
-    .addServer('http://localhost:3000', 'Development Server')
-    .addServer('https://billing-api.attackcapital.com', 'Production Server')
-    .addBearerAuth(
-      {
-        type: 'http',
-        scheme: 'bearer',
-        bearerFormat: 'JWT',
-        name: 'Authorization',
-        description: 'Enter JWT token',
-        in: 'header',
+export function setupSwagger(app: Express): void {
+  // Define the OpenAPI specification
+  const options: swaggerJsdoc.Options = {
+    definition: {
+      openapi: '3.0.0',
+      info: {
+        title: 'Centralized Billing System API',
+        version: '1.0.0',
+        description: `Centralized Billing System API — multi-tenant billing, subscriptions, payments, and analytics.`,
+        
       },
-      'JWT-auth'
-    )
-    .addSecurityRequirements('JWT-auth')
-    .addTag('Organizations', 'Organization management endpoints')
-    .addTag('Users', 'User management and authentication')
-    .addTag('Applications', 'Product application configuration')
-    .addTag('Subscription Plans', 'Pricing plan management')
-    .addTag('Subscriptions', 'Organization subscription management')
-    .addTag('Seats', 'Seat assignment and access control')
-    .addTag('Payments', 'Payment processing and history')
-    .addTag('External Mappings', 'Product-specific organization ID mapping')
-    .addTag('Webhooks', 'Webhook management and processing')
-    .addTag('Analytics', 'Revenue and usage analytics')
-    .addTag('Health', 'System health and monitoring')
-    .build()
+      servers: [
+        {
+          url: 'http://localhost:3000',
+          description: 'Development Server'
+        }
+      ],
+      components: {
+        securitySchemes: {
+          BearerAuth: {
+            type: 'http',
+            scheme: 'bearer',
+            bearerFormat: 'JWT',
+            description: 'Enter JWT token'
+          }
+        },
+        schemas: {
+          // Standard error response
+          ErrorResponse: {
+            type: 'object',
+            properties: {
+              code: { type: 'string', example: 'ERROR_CODE' },
+              message: { type: 'string', example: 'Error description' },
+              timestamp: { type: 'string', format: 'date-time' },
+              path: { type: 'string', example: '/api/endpoint' }
+            }
+          },
+          
+          // Validation error response
+          ValidationError: {
+            type: 'object',
+            properties: {
+              code: { type: 'string', example: 'VALIDATION_ERROR' },
+              message: { type: 'string', example: 'Input validation failed' },
+              details: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    field: { type: 'string', example: 'email' },
+                    message: { type: 'string', example: 'Invalid email format' }
+                  }
+                }
+              },
+              timestamp: { type: 'string', format: 'date-time' },
+              path: { type: 'string', example: '/api/organizations' }
+            }
+          },
 
-  const document = SwaggerModule.createDocument(app, config, {
-    operationIdFactory: (controllerKey: string, methodKey: string) =>
-      `${controllerKey.replace('Controller', '')}_${methodKey}`,
-  })
-
-  // Add custom schema components
-  document.components = {
-    ...document.components,
-    schemas: {
-      ...document.components?.schemas,
-      
-      // Custom error responses
-      ValidationError: {
-        type: 'object',
-        properties: {
-          code: { type: 'string', example: 'VALIDATION_ERROR' },
-          message: { type: 'string', example: 'Input validation failed' },
-          details: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                field: { type: 'string', example: 'email' },
-                message: { type: 'string', example: 'Invalid email format' }
+          // Health check response
+          HealthResponse: {
+            type: 'object',
+            properties: {
+              status: { type: 'string', example: 'healthy' },
+              timestamp: { type: 'string', format: 'date-time' },
+              uptime: { type: 'number', example: 12345.67 },
+              environment: { type: 'string', example: 'development' },
+              version: { type: 'string', example: '1.0.0' },
+              memory: {
+                type: 'object',
+                properties: {
+                  rss: { type: 'number', example: 358252544 },
+                  heapTotal: { type: 'number', example: 278396928 },
+                  heapUsed: { type: 'number', example: 249656920 },
+                  external: { type: 'number', example: 6753568 },
+                  arrayBuffers: { type: 'number', example: 4130150 }
+                }
+              },
+              cpu: {
+                type: 'object',
+                properties: {
+                  user: { type: 'number', example: 123456 },
+                  system: { type: 'number', example: 78910 }
+                }
               }
             }
           },
-          timestamp: { type: 'string', format: 'date-time' },
-          path: { type: 'string', example: '/api/organizations' }
+
+          // Basic subscription response
+          SubscriptionResponse: {
+            type: 'object',
+            properties: {
+              success: { type: 'boolean', example: true },
+              data: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', example: 'sub_123' },
+                    customerId: { type: 'string', example: 'cus_123' },
+                    priceId: { type: 'string', example: 'price_123' },
+                    status: { type: 'string', example: 'active' },
+                    createdAt: { type: 'string', format: 'date-time' }
+                  }
+                }
+              }
+            }
+          },
+
+          // Customer creation request
+          CreateCustomerRequest: {
+            type: 'object',
+            required: ['email'],
+            properties: {
+              email: { 
+                type: 'string', 
+                format: 'email',
+                example: 'customer@example.com',
+                description: 'Customer email address'
+              }
+            }
+          },
+
+          // Subscription creation request
+          CreateSubscriptionRequest: {
+            type: 'object',
+            required: ['customerId', 'priceId'],
+            properties: {
+              customerId: { 
+                type: 'string',
+                example: 'cus_123',
+                description: 'Stripe customer ID'
+              },
+              priceId: { 
+                type: 'string',
+                example: 'price_123',
+                description: 'Stripe price ID'
+              }
+            }
+          },
+
+          // Webhook payload
+          StripeWebhookPayload: {
+            type: 'object',
+            properties: {
+              type: { 
+                type: 'string', 
+                example: 'customer.subscription.created',
+                description: 'Event type'
+              },
+              data: { 
+                type: 'object',
+                description: 'Event data object'
+              }
+            }
+          }
+        },
+        responses: {
+          UnauthorizedError: {
+            description: 'Authentication information is missing or invalid',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    code: { type: 'string', example: 'UNAUTHORIZED' },
+                    message: { type: 'string', example: 'Authentication required' }
+                  }
+                }
+              }
+            }
+          },
+          ValidationError: {
+            description: 'Input validation failed',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/ValidationError'
+                }
+              }
+            }
+          }
         }
       },
-
-      // Seat verification response
-      SeatVerificationResponse: {
-        type: 'object',
-        properties: {
-          hasAccess: { type: 'boolean', example: true },
-          seatId: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          subscriptionStatus: { type: 'string', enum: ['ACTIVE', 'TRIALING', 'PAST_DUE', 'CANCELED'] },
-          organizationId: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          applicationId: { type: 'string', example: '123e4567-e89b-12d3-a456-426614174000' },
-          expiresAt: { type: 'string', format: 'date-time' }
+      security: [
+        {
+          BearerAuth: []
         }
-      },
-
-      // Webhook payload schemas
-      StripeWebhookPayload: {
-        type: 'object',
-        properties: {
-          id: { type: 'string', example: 'evt_123abc' },
-          type: { type: 'string', example: 'invoice.payment_succeeded' },
-          data: { type: 'object' },
-          created: { type: 'integer', example: 1640995200 }
-        }
-      },
-
-      // Subscription usage summary
-      SubscriptionUsageSummary: {
-        type: 'object',
-        properties: {
-          subscriptionId: { type: 'string' },
-          totalSeats: { type: 'integer', example: 10 },
-          usedSeats: { type: 'integer', example: 8 },
-          availableSeats: { type: 'integer', example: 2 },
-          utilizationRate: { type: 'number', format: 'float', example: 0.8 },
-          lastActivity: { type: 'string', format: 'date-time' }
-        }
-      }
-    }
-  }
-
-  // Add examples for common responses
-  document.components.examples = {
-    OrganizationExample: {
-      summary: 'Hospital organization',
-      value: {
-        id: '123e4567-e89b-12d3-a456-426614174000',
-        name: 'General Hospital',
-        slug: 'general-hospital',
-        ownerUserId: '123e4567-e89b-12d3-a456-426614174001',
-        billingEmail: 'billing@generalhospital.com',
-        stripeCustomerId: 'cus_123abc',
-        status: 'ACTIVE',
-        createdAt: '2023-01-01T00:00:00Z',
-        updatedAt: '2023-01-01T00:00:00Z'
-      }
+      ],
+      tags: [
+        { name: 'Health', description: 'System health and monitoring endpoints' },
+        { name: 'Organizations', description: 'Organization management endpoints' },
+        { name: 'Users', description: 'User management and authentication' },
+        { name: 'Subscriptions', description: 'Subscription management endpoints' },
+        { name: 'Payments', description: 'Payment processing and history' },
+        { name: 'Webhooks', description: 'Webhook management and processing' },
+        { name: 'Analytics', description: 'Revenue and usage analytics' }
+      ]
     },
-    
-    SubscriptionExample: {
-      summary: 'HealOS subscription',
-      value: {
-        id: '123e4567-e89b-12d3-a456-426614174002',
-        organizationId: '123e4567-e89b-12d3-a456-426614174000',
-        applicationId: '123e4567-e89b-12d3-a456-426614174003',
-        subscriptionPlanId: '123e4567-e89b-12d3-a456-426614174004',
-        quantity: 25,
-        status: 'ACTIVE',
-        currentPeriodStart: '2023-01-01T00:00:00Z',
-        currentPeriodEnd: '2023-02-01T00:00:00Z'
-      }
-    }
+    apis: [
+      './src/routes/*.ts',
+      './src/controllers/*.ts',
+      './src/webhooks/*.ts'
+    ]
   }
 
-  // Setup Swagger UI
-  SwaggerModule.setup('api/docs', app, document, {
+  // Generate OpenAPI specification
+  const specs = swaggerJsdoc(options)
+  
+  // Swagger UI options
+  const swaggerUiOptions = {
+    customSiteTitle: 'Billing System API Documentation',
+    customCss: `
+      .swagger-ui .topbar { display: none; }
+      .swagger-ui .info .title { color: #2c3e50; }
+      .swagger-ui .scheme-container { background: #f8f9fa; padding: 10px; }
+      .swagger-ui .info .description p { font-size: 14px; line-height: 1.6; }
+      .swagger-ui .info .description h2 { color: #34495e; margin-top: 20px; }
+    `,
     swaggerOptions: {
       persistAuthorization: true,
       displayRequestDuration: true,
@@ -205,114 +242,103 @@ A comprehensive multi-tenant billing platform supporting:
       tryItOutEnabled: true,
       defaultModelsExpandDepth: 2,
       defaultModelExpandDepth: 2,
-    },
-    customSiteTitle: 'Billing System API Documentation',
-    customfavIcon: '/favicon.ico',
-    customCss: `
-      .swagger-ui .topbar { display: none; }
-      .swagger-ui .info .title { color: #2c3e50; }
-      .swagger-ui .scheme-container { background: #f8f9fa; padding: 10px; }
-      .swagger-ui .info .description p { font-size: 14px; line-height: 1.6; }
-      .swagger-ui .info .description h2 { color: #34495e; margin-top: 20px; }
-    `,
+    }
+  }
+
+  // Setup Swagger UI endpoint
+  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(specs, swaggerUiOptions))
+  
+  // Serve raw OpenAPI spec as JSON
+  app.get('/api/docs/json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json')
+    res.send(specs)
   })
 
   // Generate OpenAPI JSON file for external tools
   const outputPath = join(process.cwd(), 'docs', 'openapi.json')
   try {
-    writeFileSync(outputPath, JSON.stringify(document, null, 2))
+    const docsDir = join(process.cwd(), 'docs')
+    const fs = require('fs')
+    if (!fs.existsSync(docsDir)) {
+      fs.mkdirSync(docsDir, { recursive: true })
+    }
+    writeFileSync(outputPath, JSON.stringify(specs, null, 2))
     console.log(`📄 OpenAPI spec generated: ${outputPath}`)
   } catch (error) {
     console.warn('⚠️  Could not write OpenAPI spec file:', error)
   }
+
+  console.log(`📚 Swagger documentation available at: /api/docs`)
 }
 
 /**
- * Generate standalone OpenAPI specification file
+ * Generate standalone OpenAPI specification object
  */
-export function generateOpenApiSpec(app: INestApplication): object {
-  const config = new DocumentBuilder()
-    .setTitle('Centralized Billing System API')
-    .setDescription('Complete API specification for the centralized billing system')
-    .setVersion('1.0.0')
-    .build()
+export function generateOpenApiSpec(): object {
+  const options: swaggerJsdoc.Options = {
+    definition: {
+      openapi: '3.0.0',
+      info: {
+        title: 'Centralized Billing System API',
+        description: 'Complete API specification for the centralized billing system',
+        version: '1.0.0'
+      }
+    },
+    apis: [
+      './src/routes/*.ts',
+      './src/controllers/*.ts',
+      './src/webhooks/*.ts'
+    ]
+  }
 
-  return SwaggerModule.createDocument(app, config)
+  return swaggerJsdoc(options)
 }
 
 /**
- * Custom API response decorators for common responses
+ * JSDoc patterns for Express.js route documentation
+ * 
+ * Use these JSDoc comment patterns in your route files to automatically
+ * generate OpenAPI documentation:
+ * 
+ * @example
+ * ```typescript
+ * // In your route file:
+ * 
+ * /**
+ *  * @swagger
+ *  * /api/health:
+ *  *   get:
+ *  *     tags: [Health]
+ *  *     summary: Get system health status
+ *  *     responses:
+ *  *       200:
+ *  *         description: Health check successful
+ *  *         content:
+ *  *           application/json:
+ *  *             schema:
+ *  *               $ref: '#/components/schemas/HealthResponse'
+ *  *       503:
+ *  *         description: Service unavailable
+ *  *         content:
+ *  *           application/json:
+ *  *             schema:
+ *  *               $ref: '#/components/schemas/ErrorResponse'
+ *  * /
+ * router.get('/health', (req, res) => { ... })
+ * ```
  */
-import { applyDecorators } from '@nestjs/common'
-import { 
-  ApiResponse, 
-  ApiOperation,
-  ApiBadRequestResponse,
-  ApiUnauthorizedResponse,
-  ApiForbiddenResponse,
-  ApiNotFoundResponse,
-  ApiInternalServerErrorResponse
-} from '@nestjs/swagger'
 
-export const ApiStandardResponses = () => applyDecorators(
-  ApiBadRequestResponse({
-    description: 'Bad request - Invalid input data',
-    schema: { $ref: '#/components/schemas/ValidationError' }
-  }),
-  ApiUnauthorizedResponse({
-    description: 'Unauthorized - Authentication required',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'UNAUTHORIZED' },
-        message: { type: 'string', example: 'Authentication token required' }
-      }
-    }
-  }),
-  ApiForbiddenResponse({
-    description: 'Forbidden - Insufficient permissions',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'FORBIDDEN' },
-        message: { type: 'string', example: 'Insufficient permissions' }
-      }
-    }
-  }),
-  ApiInternalServerErrorResponse({
-    description: 'Internal server error',
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'INTERNAL_ERROR' },
-        message: { type: 'string', example: 'An unexpected error occurred' }
-      }
-    }
-  })
-)
+// Standard response helpers for JSDoc documentation
+export const API_RESPONSES = {
+  SUCCESS: '200: { description: "Success" }',
+  CREATED: '201: { description: "Created successfully" }',
+  BAD_REQUEST: '400: { description: "Bad request", content: { "application/json": { schema: { $ref: "#/components/schemas/ValidationError" } } } }',
+  UNAUTHORIZED: '401: { description: "Unauthorized", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }',
+  FORBIDDEN: '403: { description: "Forbidden", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }',
+  NOT_FOUND: '404: { description: "Not found", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }',
+  INTERNAL_ERROR: '500: { description: "Internal server error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }'
+}
 
-export const ApiEntityNotFoundResponse = (entityName: string) => 
-  ApiNotFoundResponse({
-    description: `${entityName} not found`,
-    schema: {
-      type: 'object',
-      properties: {
-        code: { type: 'string', example: 'NOT_FOUND' },
-        message: { type: 'string', example: `${entityName} not found` }
-      }
-    }
-  })
-
-export const ApiCreatedResponse = (description: string, type?: any) =>
-  ApiResponse({
-    status: 201,
-    description,
-    type
-  })
-
-export const ApiSuccessResponse = (description: string, type?: any) =>
-  ApiResponse({
-    status: 200,
-    description,
-    type
-  })
+export const SECURITY_SCHEMES = {
+  BEARER_AUTH: 'security: [{ BearerAuth: [] }]'
+}

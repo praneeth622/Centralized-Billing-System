@@ -9,6 +9,7 @@ import stripeWebhookRouter from './webhooks/stripeWebhook';
 import errorHandler from './middleware/errorHandler';
 import config from './config';
 import logger from './utils/logger';
+import { setupSwagger } from './infrastructure/swagger/setup';
 
 const app = express();
 
@@ -21,6 +22,11 @@ app.use('/api/webhooks/stripe', stripeWebhookRouter);
 
 // General JSON body parser
 app.use(bodyParser.json());
+
+// Setup Swagger documentation
+if (config.nodeEnv !== 'production') {
+  setupSwagger(app);
+}
 
 // API routes
 app.use('/api', routes);

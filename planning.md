@@ -2774,3 +2774,493 @@ const apiResponseTime = new Histogram({
   help: 'API response time in seconds',
   labelNames: ['method', 'route']
 })
+
+// Gauge: Active subscriptions
+const activeSubscriptionsGauge = new Gauge({
+  name: 'billing_active_subscriptions',
+  help: 'Number of active subscriptions',
+  labelNames: ['application']
+})
+
+// Gauge: Seat utilization
+const seatUtilization = new Gauge({
+  name: 'billing_seat_utilization_rate',
+  help: 'Percentage of seats filled',
+  labelNames: ['application', 'organization']
+})
+
+// Counter: Payments
+const paymentsTotal = new Counter({
+  name: 'billing_payments_total',
+  help: 'Total payments processed',
+  labelNames: ['status', 'application']
+})
+
+// Histogram: Webhook processing time
+const webhookProcessingTime = new Histogram({
+  name: 'billing_webhook_processing_seconds',
+  help: 'Webhook processing time',
+  labelNames: ['event_type']
+})
+
+// Usage in middleware:
+app.use((req, res, next) => {
+  const start = Date.now()
+  
+  res.on('finish', () => {
+    const duration = (Date.now() - start) / 1000
+    
+    apiRequestsTotal.inc({
+      method: req.method,
+      route: req.route?.path || 'unknown',
+      status: res.statusCode
+    })
+    
+    apiResponseTime.observe({
+      method: req.method,
+      route: req.route?.path || 'unknown'
+    }, duration)
+  })
+  
+  next()
+})
+```
+
+### **11.3 Scheduled Analytics Jobs**
+
+```typescript
+// Job: Calculate MRR (runs daily at 2 AM)
+Job Schedule: '0 2 * * *'
+
+async calculateMRR() {
+  const today = startOfDay(new Date())
+  const month = startOfMonth(today)
+  
+  // Get all active subscriptions
+  const subscriptions = await prisma.organizationSubscription.findMany({
+    where: {
+      status: { in: ['ACTIVE', 'TRIALING'] },
+      currentPeriodEnd: { gte: today }
+    },
+    include: {
+      subscriptionPlan: true
+    }
+  })
+  
+  // Group by organization and application
+  const mrrByOrg = {}
+  const mrrByApp = {}
+  let totalMRR = 0
+  
+  for (const sub of subscriptions) {
+    // Calculate monthly value
+    let monthlyValue
+    if (sub.subscriptionPlan.billingInterval === 'MONTHLY') {
+      monthlyValue = sub.quantity * sub.subscriptionPlan.pricePerSeat
+    } else if (sub.subscriptionPlan.billingInterval === 'YEARLY') {
+      monthlyValue = (sub.quantity * sub.subscriptionPlan.pricePerSeat) / 12
+    }
+    
+    // Aggregate
+    mrrByOrg[sub.organizationId] = (mrrByOrg[sub.organizationId] || 0) + monthlyValue
+    mrrByApp[sub.applicationId] = (mrrByApp[sub.applicationId] || 0) + monthlyValue
+    totalMRR += monthlyValue
+    
+    // Get seat counts
+    const filledSeats = await prisma.subscriptionSeat.count({
+      where: {
+        subscriptionId: sub.id,
+        status: 'ACTIVE'
+      }
+    })
+    
+    // Store in analytics table
+    await prisma.analyticsMRR.upsert({
+      where: {
+        organizationId_applicationId_month: {
+          organizationId: sub.organizationId,
+          applicationId: sub.applicationId,
+          month
+        }
+      },
+      update: {
+        mrr: monthlyValue,
+        activeSeats: sub.quantity,
+        filledSeats,
+        emptySeats: sub.quantity - filledSeats
+      },
+      create: {
+        organizationId: sub.organizationId,
+        applicationId: sub.applicationId,
+        month,
+        mrr: monthlyValue,
+        activeSeats: sub.quantity,
+        filledSeats,
+        emptySeats: sub.quantity - filledSeats,
+        newSubscriptions: 0,  // Calculated separately
+        churnedSubscriptions: 0
+      }
+    })
+  }
+  
+  // Store total MRR
+  await prisma.analyticsMRR.upsert({
+    where: {
+      organizationId_applicationId_month: {
+        organizationId: null,
+        applicationId: null,
+        month
+      }
+    },
+    update: { mrr: totalMRR },
+    create: { month, mrr: totalMRR, activeSeats: 0, filledSeats: 0, emptySeats: 0, newSubscriptions: 0, churnedSubscriptions: 0 }
+  })
+  
+  // Update Prometheus gauge
+  activeSubscriptionsGauge.set(subscriptions.length)
+}
+
+// Job: Calculate Seat Utilization (runs hourly)
+Job Schedule: '0 * * * *'
+
+async calculateSeatUtilization() {
+  const subscriptions = await prisma.organizationSubscription.findMany({
+    where: { status: { in: ['ACTIVE', 'TRIALING'] } },
+    include: { application: true }
+  })
+  
+  for (const sub of subscriptions) {
+    const filledSeats = await prisma.subscriptionSeat.count({
+      where: { subscriptionId: sub.id, status: 'ACTIVE' }
+    })
+    
+    const utilizationRate = (filledSeats / sub.quantity) * 100
+    
+    // Store in analytics
+    await prisma.analyticsSeatUsage.upsert({
+      where: {
+        organizationId_applicationId_date: {
+          organizationId: sub.organizationId,
+          applicationId: sub.applicationId,
+          date: startOfDay(new Date())
+        }
+      },
+      update: {
+        totalSeats: sub.quantity,
+        usedSeats: filledSeats,
+        emptySeats: sub.quantity - filledSeats,
+        utilizationRate
+      },
+      create: {
+        organizationId: sub.organizationId,
+        applicationId: sub.applicationId,
+        date: startOfDay(new Date()),
+        totalSeats: sub.quantity,
+        usedSeats: filledSeats,
+        emptySeats: sub.quantity - filledSeats,
+        utilizationRate
+      }
+    })
+    
+    // Update Prometheus
+    seatUtilizationGauge.set(
+      { application: sub.application.slug, organization: sub.organizationId },
+      utilizationRate
+    )
+  }
+}
+```
+
+---
+
+## **12. CONFIGURATION**
+
+### **12.1 Environment Variables**
+
+```bash
+# .env.example
+
+# Application
+NODE_ENV=development
+PORT=3000
+API_VERSION=v1
+FRONTEND_URL=https://app.yourdomain.com
+
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/billing_db
+DATABASE_POOL_MIN=2
+DATABASE_POOL_MAX=10
+
+# Redis
+REDIS_URL=redis://localhost:6379
+REDIS_TTL=300
+REDIS_MAX_RETRIES=3
+
+# Clerk Authentication
+CLERK_PUBLISHABLE_KEY=pk_test_xxx
+CLERK_SECRET_KEY=sk_test_xxx
+CLERK_WEBHOOK_SECRET=whsec_xxx
+CLERK_API_URL=https://api.clerk.dev/v1
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_PUBLISHABLE_KEY=pk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+STRIPE_API_VERSION=2023-10-16
+
+# RabbitMQ / Bull
+RABBITMQ_URL=amqp://localhost:5672
+BULL_REDIS_URL=redis://localhost:6379
+
+# Email (SendGrid/SES/Resend)
+EMAIL_PROVIDER=sendgrid
+SENDGRID_API_KEY=SG.xxx
+EMAIL_FROM=billing@yourdomain.com
+
+# Monitoring
+SENTRY_DSN=https://xxx@sentry.io/xxx
+PROMETHEUS_PORT=9090
+
+# Rate Limiting
+RATE_LIMIT_WINDOW_MS=60000
+RATE_LIMIT_MAX_REQUESTS=100
+RATE_LIMIT_MAX_REQUESTS_PER_ORG=1000
+
+# Business Logic
+PAYMENT_GRACE_PERIOD_DAYS=7
+TRIAL_REMINDER_DAYS=3
+DATA_RETENTION_DAYS=30
+
+# Logging
+LOG_LEVEL=info
+LOG_FORMAT=json
+```
+
+### **12.2 Application Config**
+
+```typescript
+// config/app.config.ts
+
+export const appConfig = {
+  env: process.env.NODE_ENV || 'development',
+  port: parseInt(process.env.PORT || '3000'),
+  apiVersion: process.env.API_VERSION || 'v1',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  
+  cors: {
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true
+  },
+  
+  rateLimit: {
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'),
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100'),
+    maxRequestsPerOrg: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS_PER_ORG || '1000')
+  },
+  
+  business: {
+    gracePeriodDays: parseInt(process.env.PAYMENT_GRACE_PERIOD_DAYS || '7'),
+    trialReminderDays: parseInt(process.env.TRIAL_REMINDER_DAYS || '3'),
+    dataRetentionDays: parseInt(process.env.DATA_RETENTION_DAYS || '30')
+  }
+}
+```
+
+---
+
+## **13. IMPLEMENTATION ROADMAP**
+
+### **Phase 1: Foundation**
+
+```
+Day 1-2: Project Setup
+□ Initialize Express + TypeScript project
+□ Configure ESLint, Prettier, Git hooks
+□ Set up Docker Compose (Postgres, Redis, RabbitMQ)
+□ Configure Prisma
+□ Create database schema
+□ Run initial migrations
+□ Set up folder structure
+
+Day 3-5: Core Infrastructure
+□ Implement error handling middleware
+□ Implement request validation middleware
+□ Set up Winston logger
+□ Configure environment variables
+□ Set up Redis connection
+□ Implement rate limiting
+□ Set up Bull queue
+
+Day 6-8: Authentication & Authorization
+□ Clerk integration (JWT verification)
+□ Auth middleware implementation
+□ Role-based access control
+□ Organization ownership checks
+□ Create User CRUD
+□ Create Organization CRUD
+□ Create External Org Mapping
+
+Day 9-10: Basic Models
+□ Create Application CRUD
+□ Create Subscription Plan CRUD
+□ Implement audit logging
+□ Write unit tests for services
+□ API documentation (Swagger)
+```
+
+### **Phase 2: Stripe Integration**
+
+```
+Week 3: Checkout & Subscriptions
+□ Stripe client setup
+□ Create/Get Stripe customers
+□ Subscription plan sync with Stripe
+□ Checkout session creation
+□ Handle checkout completion
+□ OrganizationSubscription CRUD
+□ Test checkout flow end-to-end
+
+Week 4: Webhooks
+□ Webhook endpoint setup
+□ Signature verification
+□ Idempotency implementation
+□ checkout.session.completed handler
+□ customer.subscription.updated handler
+□ invoice.payment_succeeded handler
+□ invoice.payment_failed handler
+□ customer.subscription.deleted handler
+□ Webhook retry logic (queue)
+□ Integration tests for webhooks
+```
+
+### **Phase 3: Seat Management**
+
+```
+Week 5: Seat Assignment
+□ SubscriptionSeat model
+□ Assign seat logic (availability check)
+□ Remove seat logic
+□ Bulk assign/remove
+□ Seat status management
+□ Access control middleware
+□ Seat verification API
+□ Cache access checks (Redis)
+
+Week 6: Quantity Management
+□ Increase seat count (no proration)
+□ Decrease seat count (validation)
+□ Stripe quantity update integration
+□ Next-cycle billing logic
+□ Quantity change notifications
+□ Admin UI flow testing
+□ Integration tests
+```
+
+### **Phase 4: Trial & Payments **
+
+```
+□ Trial start logic
+□ Trial end handling (payment success/fail)
+□ Trial reminder emails (scheduled job)
+□ Payment failure grace period
+□ Grace period expiration (scheduled job)
+□ Payment retry logic
+□ Subscription reactivation
+□ Payment history APIs
+□ Email templates
+```
+
+### **Phase 5: Events & Notifications **
+
+```
+□ Event bus implementation
+□ Domain event definitions
+□ Event handlers (email, cache invalidation)
+□ Product app webhook notifications
+□ Webhook signature generation
+□ Retry logic for failed webhooks
+□ Dead letter queue
+□ Integration tests for event flow
+```
+
+### **Phase 6: Analytics & Monitoring**
+
+```
+□ Prometheus metrics endpoints
+□ Grafana dashboard JSON
+□ MRR calculation job
+□ Seat utilization job
+□ Revenue aggregation job
+□ Analytics APIs
+□ Sentry error tracking
+□ Performance optimization
+```
+
+### **Phase 7: Testing & Documentation**
+
+```
+□ Unit tests (80% coverage)
+□ Integration tests (API + DB)
+□ E2E tests (critical flows)
+□ Load testing (Artillery/k6)
+□ API documentation (Postman/Swagger)
+□ Architecture documentation
+□ Deployment guide
+□ Runbook for common issues
+```
+
+### **Phase 8: Production Ready**
+
+```
+Week 11: Security & Optimization
+□ Security audit (OWASP checklist)
+□ Database indexing optimization
+□ Query performance tuning
+□ Redis caching strategy
+□ API response optimization
+□ Rate limiting fine-tuning
+
+Week 12: Deployment
+□ Docker production build
+□ CI/CD pipeline (GitHub Actions)
+□ Deployment scripts
+□ Health check endpoints
+□ Backup strategy
+□ Disaster recovery plan
+□ Final QA & bug fixes
+□ Production deployment
+□ Post-deployment monitoring
+```
+
+---
+
+## **CRITICAL REMINDERS**
+
+### **Business Logic:**
+1. ✅ One subscription per (organization + product)
+2. ✅ Seat assignments are IMMEDIATE (no Stripe call)
+3. ✅ Quantity changes take effect NEXT CYCLE (no proration)
+4. ✅ Removing user = Free seat (no refund)
+5. ✅ Reducing seats requires validation (filledSeats ≤ newQuantity)
+6. ✅ Trial converts for ALL purchased seats (even if unfilled)
+7. ✅ Only OWNER can modify quantity (BILLING_ADMIN can only assign)
+8. ✅ Access = Active Subscription AND Active Seat (both required)
+9. ✅ Payment failure = 7-day grace period (configurable)
+10. ✅ Webhook idempotency is CRITICAL
+
+### **External Org Mapping:**
+11. ✅ Each product can use different org identifiers
+12. ✅ Map external IDs to central organizationId
+13. ✅ Use mapping for product app webhooks
+
+### **Performance:**
+14. ✅ Cache access checks (5-min TTL)
+15. ✅ Single query for access verification
+16. ✅ No Stripe API calls for access checks
+17. ✅ Invalidate cache on seat/subscription changes
+
+### **Security:**
+18. ✅ Verify Stripe webhook signatures
+19. ✅ Never log payment details
+20. ✅ Encrypt sensitive data at rest
+21. ✅ Rate limit per user AND organization

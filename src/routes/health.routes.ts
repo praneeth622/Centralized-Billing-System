@@ -4,6 +4,27 @@ import config from '../config';
 
 const router = Router();
 
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     tags: [Health]
+ *     summary: Get system health status
+ *     description: Returns comprehensive system health information including uptime, memory usage, and CPU statistics
+ *     responses:
+ *       200:
+ *         description: Health check successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/HealthResponse'
+ *       503:
+ *         description: Service unavailable
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 // Health check endpoint
 router.get('/health', (req: Request, res: Response) => {
   try {
@@ -29,6 +50,31 @@ router.get('/health', (req: Request, res: Response) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/hello:
+ *   get:
+ *     tags: [Health]
+ *     summary: Simple greeting endpoint
+ *     description: Returns a simple greeting message with timestamp and environment information
+ *     responses:
+ *       200:
+ *         description: Greeting message
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Hello from Centralized Billing System!"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                 environment:
+ *                   type: string
+ *                   example: "development"
+ */
 // Hello world endpoint
 router.get('/hello', (req: Request, res: Response) => {
   try {
