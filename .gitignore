@@ -1,9 +1,49 @@
-node_modules/
-dist/
-.env
-.env.local
-coverage/
-npm-debug.log
-.DS_Store
-
+# Ignore node modules
+/node_modules/
 /trash
+
+# Ignore IDE/editor specific files
+.vscode/
+.idea/
+*.suo
+
+# Ignore system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Ignore log files
+npm-debug.log
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Ignore build output
+/build/
+/dist/
+/out/
+
+# Ignore dependency directories
+/node_modules/
+/.pnp/
+.pnp.js
+
+# Ignore test coverage directory
+/coverage/
+
+# Ignore environment variable files
+.env
+.env.*.local
+
+# Ignore md files
+*.md
+!planning.md
+!README.md
+
+
+# Ignore prisma generated files
+/prisma/generated/
+/prisma/migrations/
+
+# Ignore OS generated files
+.DS_Store

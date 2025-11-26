@@ -1,0 +1,494 @@
+// ============================================
+// CENTRALIZED SEAT-BASED BILLING SYSTEM
+// Prisma Schema for PostgreSQL (Prisma v6)
+// ============================================
+
+// This schema implements a multi-tenant, seat-based billing system that supports:
+// 1. Multiple product applications (HealOS, PowerDialer, Openmic, etc.)
+// 2. Organization-level subscriptions with external ID mapping
+// 3. Seat-based access control with real-time verification
+// 4. Stripe integration for payments and subscription management
+// 5. Comprehensive audit logging and analytics
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS - Define business domain values
+// ============================================
+
+enum OrganizationStatus {
+  ACTIVE    // Organization is active and can use services
+  SUSPENDED // Temporarily suspended (billing issues, etc.)
+  DELETED   // Soft deleted (data retention for compliance)
+}
+
+enum UserRole {
+  OWNER         // Organization owner - full control over billing and seats
+  ADMIN         // Product admin - can use product but no billing access
+  BILLING_ADMIN // Can manage seat assignments but cannot modify subscriptions
+  MEMBER        // Regular user - can only use assigned seats
+}
+
+enum UserStatus {
+  ACTIVE    // User can be assigned seats and access services
+  INACTIVE  // User exists but cannot be assigned new seats
+  SUSPENDED // User is suspended from all services
+}
+
+enum ApplicationStatus {
+  ACTIVE      // Application is available for subscription
+  INACTIVE    // Application is not available for new subscriptions
+  MAINTENANCE // Application is temporarily unavailable
+}
+
+enum SubscriptionStatus {
+  PENDING             // Checkout session created but not completed
+  TRIALING            // In free trial period
+  ACTIVE              // Subscription is active and paid
+  PAST_DUE            // Payment failed, in grace period
+  CANCELED            // Subscription has been canceled
+  INCOMPLETE          // Initial payment failed
+  INCOMPLETE_EXPIRED  // Initial payment never completed
+  PAUSED              // Temporarily paused (future feature)
+}
+
+enum SeatStatus {
+  ACTIVE          // User has active access to the product
+  PENDING_INVITE  // Seat is reserved but user not yet invited
+  REMOVED         // User was removed, seat is now available
+}
+
+enum BillingInterval {
+  MONTHLY  // Monthly recurring billing
+  YEARLY   // Annual recurring billing
+  ONE_TIME // One-time payment (future feature)
+}
+
+enum PaymentStatus {
+  PENDING    // Payment is being processed
+  PROCESSING // Payment is in progress
+  SUCCEEDED  // Payment completed successfully
+  FAILED     // Payment failed
+  REFUNDED   // Payment was refunded
+  CANCELED   // Payment was canceled
+}
+
+enum AuditActorType {
+  USER    // Action performed by a user
+  SYSTEM  // Action performed by system (automated)
+  WEBHOOK // Action triggered by external webhook
+  API     // Action performed via API call
+}
+
+// ============================================
+// CORE BUSINESS MODELS
+// ============================================
+
+// Organizations represent customer companies/hospitals/businesses
+// They are the billing entity and can subscribe to multiple products
+model Organization {
+  id   String @id @default(uuid())
+  name String // Company/hospital name
+  slug String @unique // URL-friendly identifier
+
+  // Billing Configuration
+  ownerUserId   String  // User who owns this organization
+  billingEmail  String  // Email for billing notifications
+  taxId         String? // Tax identifier for invoicing
+  address       Json?   // Billing address as JSON object
+  metadata      Json?   // Additional custom fields
+
+  // Stripe Integration - Single customer for all product subscriptions
+  stripeCustomerId String? @unique
+
+  status OrganizationStatus @default(ACTIVE)
+
+  // Timestamps
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete for data retention
+
+  // Relations
+  owner            User                       @relation("OrganizationOwner", fields: [ownerUserId], references: [id])
+  users            User[]                     @relation("OrganizationUsers")
+  subscriptions    OrganizationSubscription[]
+  externalMappings ExternalOrgMapping[] // Maps product-specific org IDs
+  payments         Payment[]
+  auditLogs        AuditLog[]
+
+  // Performance indexes for common queries
+  @@index([slug]) // For fast org lookup by slug
+  @@index([stripeCustomerId]) // For Stripe webhook processing
+  @@index([status]) // For filtering active organizations
+  @@index([ownerUserId]) // For owner-based queries
+  @@map("organizations")
+}
+
+// Applications represent the different products (HealOS, PowerDialer, etc.)
+model Application {
+  id          String            @id @default(uuid())
+  name        String            // Human-readable name
+  slug        String            @unique // URL-friendly identifier
+  description String?
+  webhookUrl  String?           // URL to notify on seat changes
+  status      ApplicationStatus @default(ACTIVE)
+  metadata    Json?             // Additional application configuration
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  subscriptionPlans SubscriptionPlan[]
+  subscriptions     OrganizationSubscription[]
+  externalMappings  ExternalOrgMapping[]
+
+  @@index([slug]) // Fast lookup by application slug
+  @@index([status]) // Filter active applications
+  @@map("applications")
+}
+
+// External Organization Mapping - Critical for multi-product architecture
+// Maps product-specific organization identifiers to our central organization ID
+// Example: HealOS uses "hospital_id", PowerDialer uses "company_id"
+model ExternalOrgMapping {
+  id             String @id @default(uuid())
+  organizationId String
+  applicationId  String
+  externalOrgId  String  // The product's own organization identifier
+  externalOrgKey String? // Key name like "hospital_id", "company_id"
+  metadata       Json?   // Additional mapping data
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id])
+  application  Application  @relation(fields: [applicationId], references: [id])
+
+  // Business constraint: One external ID per application
+  @@unique([applicationId, externalOrgId])
+  @@index([organizationId]) // Fast lookup by central org ID
+  @@index([applicationId]) // Fast lookup by application
+  @@map("external_org_mappings")
+}
+
+// Users represent individual people who can be assigned seats
+model User {
+  id             String     @id @default(uuid())
+  clerkUserId    String     @unique // Integration with Clerk authentication
+  email          String     @unique
+  fullName       String
+  organizationId String?    // Users can exist without organization (pending invite)
+  role           UserRole   @default(MEMBER)
+  status         UserStatus @default(ACTIVE)
+  metadata       Json?      // Additional user properties
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime? // Soft delete for audit trail
+
+  // Relations
+  organization      Organization?      @relation("OrganizationUsers", fields: [organizationId], references: [id])
+  ownedOrgs         Organization[]     @relation("OrganizationOwner")
+  subscriptionSeats SubscriptionSeat[] // Seats assigned to this user
+  auditLogs         AuditLog[]         // Actions performed by this user
+
+  // Performance indexes
+  @@index([clerkUserId]) // Fast lookup from Clerk JWT
+  @@index([organizationId]) // Fast org member lookup
+  @@index([email]) // Email-based searches
+  @@index([role]) // Role-based filtering
+  @@map("users")
+}
+
+// Subscription Plans define pricing tiers for each application
+model SubscriptionPlan {
+  id            String          @id @default(uuid())
+  applicationId String
+  name          String          // e.g., "Team Plan", "Enterprise"
+  slug          String          // URL-friendly identifier
+  description   String?
+
+  // Stripe Integration
+  stripePriceId   String @unique // Stripe Price ID for billing
+  stripeProductId String         // Stripe Product ID
+
+  // Pricing Structure
+  pricePerSeat    Decimal         @db.Decimal(10, 2) // Cost per seat in dollars
+  currency        String          @default("USD")
+  billingInterval BillingInterval // Monthly/Yearly/One-time
+
+  // Seat Configuration
+  minSeats Int  @default(1) // Minimum seats required
+  maxSeats Int? // Maximum seats allowed (null = unlimited)
+
+  // Trial Configuration
+  trialPeriodDays Int @default(0) // Free trial days
+
+  // Plan Configuration
+  features Json?   // Feature list as JSON
+  metadata Json?   // Additional plan data
+  isActive Boolean @default(true) // Plan available for purchase
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  application   Application                @relation(fields: [applicationId], references: [id])
+  subscriptions OrganizationSubscription[]
+
+  @@index([applicationId]) // Fast lookup by application
+  @@index([stripePriceId]) // Fast Stripe integration lookup
+  @@index([isActive]) // Filter active plans
+  @@map("subscription_plans")
+}
+
+// ============================================
+// SUBSCRIPTION & SEAT MANAGEMENT (CORE LOGIC)
+// ============================================
+
+// Organization Subscriptions - Central to the billing system
+// Each org can have one subscription per application
+model OrganizationSubscription {
+  id                 String @id @default(uuid())
+  organizationId     String
+  applicationId      String
+  subscriptionPlanId String
+
+  // Stripe Integration
+  stripeCustomerId     String  // Links to organization's Stripe customer
+  stripeSubscriptionId String? @unique // Stripe subscription ID
+  stripeItemId         String? // Stripe subscription item for quantity updates
+
+  // Seat Management - CRITICAL business logic
+  quantity Int                @default(0) // Number of paid seats
+  status   SubscriptionStatus @default(PENDING)
+
+  // Billing Cycle Information
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  // Trial Management
+  trialStart DateTime?
+  trialEnd   DateTime?
+
+  // Cancellation Management
+  cancelAtPeriodEnd Boolean   @default(false)
+  canceledAt        DateTime?
+  endedAt           DateTime?
+
+  metadata Json? // Additional subscription data
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  organization     Organization       @relation(fields: [organizationId], references: [id])
+  application      Application        @relation(fields: [applicationId], references: [id])
+  subscriptionPlan SubscriptionPlan   @relation(fields: [subscriptionPlanId], references: [id])
+  seats            SubscriptionSeat[] // Individual seat assignments
+  payments         Payment[]          // Payment history
+
+  // Business Constraints
+  @@unique([organizationId, applicationId]) // One subscription per app per org
+  @@index([stripeSubscriptionId]) // Fast Stripe webhook processing
+  @@index([status]) // Filter by subscription status
+  @@index([currentPeriodEnd]) // For renewal processing
+  @@index([organizationId]) // Fast org-based lookups
+  @@index([applicationId]) // Fast app-based lookups
+  @@map("organization_subscriptions")
+}
+
+// Subscription Seats - Individual user access assignments
+// This is where seat-based access control is enforced
+model SubscriptionSeat {
+  id             String     @id @default(uuid())
+  subscriptionId String
+  userId         String
+  status         SeatStatus @default(ACTIVE)
+
+  // Assignment Tracking
+  assignedAt DateTime  @default(now())
+  removedAt  DateTime? // When seat was freed up
+
+  // Administrative Tracking
+  assignedBy String? // User ID of admin who assigned this seat
+  metadata   Json?   // Additional seat-specific data
+
+  // Relations
+  subscription OrganizationSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  user         User                     @relation(fields: [userId], references: [id])
+
+  // Business Constraints
+  @@unique([subscriptionId, userId]) // One seat per user per subscription
+  @@index([subscriptionId]) // Fast seat lookup by subscription
+  @@index([userId]) // Fast seat lookup by user
+  @@index([status]) // Filter active/removed seats
+  @@map("subscription_seats")
+}
+
+// ============================================
+// PAYMENT & BILLING TRACKING
+// ============================================
+
+// Payment records for all billing transactions
+model Payment {
+  id             String        @id @default(uuid())
+  subscriptionId String?       // Optional: some payments may not be subscription-related
+  organizationId String
+
+  // Stripe Integration
+  stripePaymentIntentId String? @unique
+  stripeInvoiceId       String? // Links to Stripe invoice
+  stripeChargeId        String? // Links to Stripe charge
+
+  // Payment Details
+  amount         Decimal       @db.Decimal(10, 2) // Amount in dollars
+  currency       String        @default("USD")
+  status         PaymentStatus @default(PENDING)
+  paymentMethod  String?       // Payment method used
+  failureReason  String?       // Reason for payment failure
+  receiptUrl     String?       // Link to payment receipt
+
+  // Timestamps
+  paidAt    DateTime? // When payment was successfully processed
+  createdAt DateTime  @default(now())
+
+  metadata Json? // Additional payment data
+
+  // Relations
+  subscription OrganizationSubscription? @relation(fields: [subscriptionId], references: [id])
+  organization Organization               @relation(fields: [organizationId], references: [id])
+
+  @@index([subscriptionId]) // Fast subscription payment lookup
+  @@index([organizationId]) // Fast organization payment lookup
+  @@index([status]) // Filter by payment status
+  @@index([stripePaymentIntentId]) // Fast Stripe integration lookup
+  @@index([stripeInvoiceId]) // Fast invoice lookup
+  @@map("payments")
+}
+
+// ============================================
+// WEBHOOK & AUDIT INFRASTRUCTURE
+// ============================================
+
+// Stripe Webhook Events - Ensures idempotent webhook processing
+model StripeWebhookEvent {
+  id          String    @id @default(uuid())
+  eventId     String    @unique // Stripe's event.id for idempotency
+  eventType   String    // Type of Stripe event
+  payload     Json      // Complete Stripe event payload
+  processed   Boolean   @default(false)
+  processedAt DateTime? // When event was successfully processed
+  error       String?   // Error message if processing failed
+  retryCount  Int       @default(0) // Number of processing attempts
+
+  createdAt DateTime @default(now())
+
+  // Performance indexes for webhook processing
+  @@index([eventId]) // Fast idempotency check
+  @@index([processed]) // Find unprocessed events
+  @@index([eventType]) // Filter by event type
+  @@index([createdAt]) // Time-based cleanup queries
+  @@map("stripe_webhook_events")
+}
+
+// Audit Log - Complete trail of all system actions
+model AuditLog {
+  id             String          @id @default(uuid())
+  entityType     String          // Type of entity modified (subscription, seat, etc.)
+  entityId       String          // ID of the specific entity
+  action         String          // Action performed (created, updated, etc.)
+  actorUserId    String?         // User who performed the action
+  actorType      AuditActorType  @default(USER)
+  changes        Json?           // Before/after values for the change
+  ipAddress      String?         // IP address of the actor
+  userAgent      String?         // Browser/client information
+  organizationId String?         // Organization context
+  metadata       Json?           // Additional context data
+
+  createdAt DateTime @default(now())
+
+  // Relations
+  actorUser    User?         @relation(fields: [actorUserId], references: [id])
+  organization Organization? @relation(fields: [organizationId], references: [id])
+
+  // Performance indexes for audit queries
+  @@index([entityType, entityId]) // Fast entity-specific audit trail
+  @@index([createdAt]) // Time-based audit queries
+  @@index([actorUserId]) // User-specific action history
+  @@index([organizationId]) // Organization-specific audit trail
+  @@map("audit_logs")
+}
+
+// ============================================
+// ANALYTICS & REPORTING TABLES
+// ============================================
+
+// Monthly Recurring Revenue analytics
+model AnalyticsMRR {
+  id               String    @id @default(uuid())
+  organizationId   String?   // Null for system-wide metrics
+  applicationId    String?   // Null for organization-wide metrics
+  month            DateTime  // First day of the month
+  mrr              Decimal   @db.Decimal(12, 2) // Monthly recurring revenue
+  activeSeats      Int       // Total seats purchased
+  filledSeats      Int       // Seats with assigned users
+  emptySeats       Int       // Purchased but unassigned seats
+  newSubscriptions Int       // New subscriptions this month
+  churnedSubscriptions Int   // Canceled subscriptions this month
+
+  createdAt DateTime @default(now())
+
+  // Business constraint: One record per org/app/month combination
+  @@unique([organizationId, applicationId, month])
+  @@index([month]) // Time-based analytics queries
+  @@index([applicationId]) // Application-specific metrics
+  @@map("analytics_mrr")
+}
+
+// Daily seat utilization tracking
+model AnalyticsSeatUsage {
+  id              String   @id @default(uuid())
+  organizationId  String
+  applicationId   String
+  date            DateTime // Date of the measurement
+  totalSeats      Int      // Total purchased seats
+  usedSeats       Int      // Seats with active users
+  emptySeats      Int      // Unused seats
+  utilizationRate Decimal  @db.Decimal(5, 2) // Percentage utilization
+
+  createdAt DateTime @default(now())
+
+  // Business constraint: One record per org/app/date
+  @@unique([organizationId, applicationId, date])
+  @@index([date]) // Time-based queries
+  @@index([applicationId]) // Application-specific metrics
+  @@map("analytics_seat_usage")
+}
+
+// Daily revenue analytics
+model AnalyticsRevenue {
+  id             String    @id @default(uuid())
+  organizationId String?   // Null for system-wide metrics
+  applicationId  String?   // Null for organization-wide metrics
+  date           DateTime  // Date of the revenue
+  revenue        Decimal   @db.Decimal(12, 2) // Total revenue
+  payments       Int       // Number of successful payments
+  refunds        Decimal   @db.Decimal(12, 2) // Total refunds
+
+  createdAt DateTime @default(now())
+
+  // Business constraint: One record per org/app/date combination
+  @@unique([organizationId, applicationId, date])
+  @@index([date]) // Time-based analytics
+  @@index([applicationId]) // Application-specific revenue
+  @@map("analytics_revenue")
+}
