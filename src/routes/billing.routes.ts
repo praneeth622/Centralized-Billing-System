@@ -22,14 +22,6 @@ router.post(
   BillingController.createSubscription
 );
 
-router.post(
-  '/payments',
-  auth,
-  [body('customerId').optional().isString(), body('amount').isInt({ min: 50 })],
-  validateRequest,
-  BillingController.createPayment
-);
-
-router.get('/invoices/:customerId', auth, BillingController.listInvoices);
+router.get('/subscriptions', auth, BillingController.getSubscriptions);
 
 export default router;

@@ -1,0 +1,226 @@
+name: Security & Dependency Updates
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  # Security audit
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run npm audit
+      run: npm audit --audit-level=moderate --json > npm-audit-results.json || true
+
+    - name: Parse audit results
+      id: audit
+      run: |
+        if [ -s npm-audit-results.json ]; then
+          VULNERABILITIES=$(jq '.metadata.vulnerabilities.total' npm-audit-results.json)
+          HIGH_VULNS=$(jq '.metadata.vulnerabilities.high' npm-audit-results.json)
+          CRITICAL_VULNS=$(jq '.metadata.vulnerabilities.critical' npm-audit-results.json)
+          
+          echo "total=$VULNERABILITIES" >> $GITHUB_OUTPUT
+          echo "high=$HIGH_VULNS" >> $GITHUB_OUTPUT
+          echo "critical=$CRITICAL_VULNS" >> $GITHUB_OUTPUT
+          
+          if [ "$CRITICAL_VULNS" -gt 0 ] || [ "$HIGH_VULNS" -gt 5 ]; then
+            echo "severity=high" >> $GITHUB_OUTPUT
+          else
+            echo "severity=low" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "total=0" >> $GITHUB_OUTPUT
+          echo "high=0" >> $GITHUB_OUTPUT
+          echo "critical=0" >> $GITHUB_OUTPUT
+          echo "severity=none" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create security issue
+      if: steps.audit.outputs.severity == 'high'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const title = '🚨 Security Alert: High/Critical Vulnerabilities Detected';
+          const body = `## Security Vulnerability Report
+          
+          **Critical Vulnerabilities:** ${{ steps.audit.outputs.critical }}
+          **High Vulnerabilities:** ${{ steps.audit.outputs.high }}
+          **Total Vulnerabilities:** ${{ steps.audit.outputs.total }}
+          
+          ### Action Required
+          - Review the security audit results
+          - Update vulnerable dependencies
+          - Run \`npm audit fix\` or update manually
+          
+          ### Audit Results
+          \`\`\`json
+          ${require('fs').readFileSync('npm-audit-results.json', 'utf8')}
+          \`\`\`
+          
+          **Generated on:** ${new Date().toISOString()}
+          **Workflow:** [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: title,
+            body: body,
+            labels: ['security', 'high-priority', 'automated']
+          });
+
+  # Dependency updates
+  dependency-update:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+
+    - name: Check for outdated packages
+      run: |
+        npm outdated --json > outdated-packages.json || true
+        if [ -s outdated-packages.json ]; then
+          echo "has_outdated=true" >> $GITHUB_ENV
+        else
+          echo "has_outdated=false" >> $GITHUB_ENV
+        fi
+
+    - name: Update patch versions
+      if: env.has_outdated == 'true'
+      run: |
+        # Update only patch versions for safety
+        npm update --save
+        
+        # Check if any changes were made
+        if git diff --quiet package-lock.json; then
+          echo "no_changes=true" >> $GITHUB_ENV
+        else
+          echo "no_changes=false" >> $GITHUB_ENV
+        fi
+
+    - name: Create Pull Request for dependency updates
+      if: env.no_changes == 'false'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: '📦 Update dependencies (patch versions)'
+        title: '📦 Automated Dependency Updates'
+        body: |
+          ## Automated Dependency Updates
+          
+          This PR contains automated updates to patch versions of dependencies.
+          
+          ### Changes
+          - Updated patch versions of outdated packages
+          - Only safe, backward-compatible updates included
+          
+          ### Outdated Packages
+          ```json
+          ${{ hashFiles('outdated-packages.json') && file('outdated-packages.json') || 'No outdated packages found' }}
+          ```
+          
+          ### Testing
+          - [ ] Automated tests pass
+          - [ ] Manual testing completed
+          
+          **Generated on:** ${{ steps.date.outputs.date }}
+          **Workflow:** [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        branch: automated-dependency-updates
+        delete-branch: true
+        base: develop
+
+  # Docker image security scan
+  docker-security:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: docker build -t billing-service:scan .
+
+    - name: Run Trivy scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'billing-service:scan'
+        format: 'json'
+        output: 'trivy-results.json'
+
+    - name: Parse Trivy results
+      id: trivy
+      run: |
+        if [ -s trivy-results.json ]; then
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json)
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json)
+          
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+          echo "high=$HIGH" >> $GITHUB_OUTPUT
+          
+          if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 10 ]; then
+            echo "severity=high" >> $GITHUB_OUTPUT
+          else
+            echo "severity=low" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "critical=0" >> $GITHUB_OUTPUT
+          echo "high=0" >> $GITHUB_OUTPUT
+          echo "severity=none" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Upload Trivy results
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.json'
+
+  # Send weekly summary
+  weekly-summary:
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 2 * * 0'  # Only on Sundays
+    needs: [security-audit, docker-security]
+    steps:
+    - name: Send weekly security summary
+      uses: 8398a7/action-slack@v3
+      with:
+        status: 'custom'
+        channel: '#security'
+        custom_payload: |
+          {
+            "text": "📊 Weekly Security Summary - Billing Service",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Weekly Security Summary - Billing Service*\n\n• **NPM Vulnerabilities:** ${{ needs.security-audit.outputs.total || 0 }} total\n• **Docker Vulnerabilities:** ${{ needs.docker-security.outputs.critical || 0 }} critical, ${{ needs.docker-security.outputs.high || 0 }} high\n• **Status:** ${{ (needs.security-audit.outputs.severity == 'high' || needs.docker-security.outputs.severity == 'high') && '🔴 Action Required' || '✅ All Good' }}"
+                }
+              }
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
